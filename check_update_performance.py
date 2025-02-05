@@ -1,5 +1,3 @@
-#!/bin/python3
-
 import datetime
 import json
 import logging
@@ -58,27 +56,35 @@ def index_post(url: str, user: str, password: str, data: dict | str, session: re
     try:
         response = session.post(url, data=data, headers=headers, verify=False, auth=(user, password))
         response.raise_for_status()
-        logger.info("Data indexed successfully: %s", response.json())
+        logger.debug("Data indexed: %s", response.json())
         return response.json()
     except requests.exceptions.RequestException:
         logger.exception("Error indexing data.")
         return {}
 
 
-def index_post_batch(url: str, user: str, password: str, data: list, index, batch_size=5000):
-    """Send a POST request to index documents in chunks to avoid '413 Request Entity Too Large' error."""
-    session = get_retry_session()
+def index_post_batch(url: str, user: str, password: str, data: list, index: str, batch_size=1000, session = None):
+    """Send a POST request to index documents in larger chunks."""
+    data_length = len(data)
 
-    # Split data into smaller batches
-    for i in range(0, len(data), batch_size):
+    def send_request(_data):
+        payload = set_bulk_payload(_data, index)
+        return index_post(url, user, password, payload, session)
+    
+    if data_length <= batch_size:
+        if not isinstance(data, list):
+            data = [data]
+        return send_request(data)
+
+    # Split data into larger batches
+    responses = []
+    for i in range(0, data_length, batch_size):
         chunk = data[i:i + batch_size]
-        # Convert batch to bulk format
-        payload = set_bulk_payload(chunk, index)
-        response = index_post(url, user, password, payload, session)
-        logger.info(f"Indexed batch {i // batch_size + 1} of {len(data) // batch_size + 1} successfully.")
-        logger.debug("Response: %s", response)
+        response = send_request(chunk)
+        responses.append(response)
+        logger.info(f"Indexed batch {i // batch_size + 1} of {data_length // batch_size} successfully.")
 
-    return {"status": "success"}
+    return responses
 
 
 def save_generated_data(data, filename):
@@ -174,35 +180,27 @@ def generate_random_agent(agent_type: str) -> dict:
     }
 
 
-def generate_agents(number: int) -> list:
+def generate_agents(number: int):
     """Generate a list of random agent events."""
     logger.info("Generating %d random agents...", number)
-    data = []
     num_windows = int(0.5 * number)
     num_macos = int(0.15 * number)
     num_linux = number - num_windows - num_macos
 
     for _ in range(num_windows):
-        data.append({'agent': generate_random_agent('windows')})
+        yield {'agent': generate_random_agent('windows')}
     for _ in range(num_macos):
-        data.append({'agent': generate_random_agent('macos')})
+        yield {'agent': generate_random_agent('macos')}
     for _ in range(num_linux):
-        data.append({'agent': generate_random_agent('linux')})
+        yield {'agent': generate_random_agent('linux')}
 
     logger.info("Random data generation complete.")
-    return data
-
-
-def get_user_input(prompt, default):
-    """Get user input with a default fallback."""
-    return input(f"{prompt} (default: '{default}'): ") or default
 
 
 def set_bulk_payload(documents, index):
     payload = ""
     for doc in documents:
-        metadata = {"index": {"_index": index,
-                              "_id": doc.get('agent', {}).get('id')}}
+        metadata = {"index": {"_index": index, "_id": doc.get('agent', {}).get('id')}}
         payload += json.dumps(metadata) + "\n"
         payload += json.dumps(doc) + "\n"
     return payload
@@ -210,48 +208,41 @@ def set_bulk_payload(documents, index):
 
 def generate_package_doc(agents, amount):
     """Send restart documents to a list of agent IDs."""
-    packages = [
-        {
-            "agent": {
-                "id": agent.get('agent', {}).get('id'),
-                "name": agent.get('agent', {}).get('name'),
-                "groups": agent.get('agent', {}).get('groups'),
-                "type": agent.get('agent', {}).get('type'),
-                "version": agent.get('agent', {}).get('version'),
-                "host": {
-                    "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
-                    "hostname": agent.get('agent', {}).get('host', {}).get('hostname'),
-                    "ip": agent.get('agent', {}).get('host', {}).get('ip'),
-                    "os": {
-                        "name": agent.get('agent', {}).get('host', {}).get('os', {}).get('name'),
-                        "type": agent.get('agent', {}).get('host', {}).get('os', {}).get('type'),
-                        "version": agent.get('agent', {}).get('host', {}).get('os', {}).get('version')
-                    }
+    for agent in agents:
+        for _ in range(amount):
+            yield {
+                "agent": {
+                    "id": agent.get('agent', {}).get('id'),
+                    "name": agent.get('agent', {}).get('name'),
+                    "groups": agent.get('agent', {}).get('groups'),
+                    "type": agent.get('agent', {}).get('type'),
+                    "version": agent.get('agent', {}).get('version'),
+                    "host": {
+                        "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
+                        "hostname": agent.get('agent', {}).get('host', {}).get('hostname'),
+                        "ip": agent.get('agent', {}).get('host', {}).get('ip'),
+                        "os": {
+                            "name": agent.get('agent', {}).get('host', {}).get('os', {}).get('name'),
+                            "type": agent.get('agent', {}).get('host', {}).get('os', {}).get('type'),
+                            "version": agent.get('agent', {}).get('host', {}).get('os', {}).get('version')
+                        }
+                    },
                 },
-            },
-            "@timestamp": datetime.datetime.now().isoformat(),
-            "package": {
-                "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
-                "description": "tmux is a \"terminal multiplexer.\"  It enables a number of terminals (or \
-                                windows) to be accessed and controlled from a single terminal.  tmux is \
-                                intended to be a simple, modern, BSD-licensed alternative to programs such \
-                                as GNU Screen.",
-                "installed": "1738151465",
-                "name": "tmux",
-                "path": " ",
-                "size": 1166902,
-                "type": "rpm",
-                "version": "3.2a-5.el9"
+                "@timestamp": datetime.datetime.now().isoformat(),
+                "package": {
+                    "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
+                    "description": "tmux is a \"terminal multiplexer.\"  It enables a number of terminals (or \
+                                    windows) to be accessed and controlled from a single terminal.  tmux is \
+                                    intended to be a simple, modern, BSD-licensed alternative to programs such \
+                                    as GNU Screen.",
+                    "installed": "1738151465",
+                    "name": "tmux",
+                    "path": " ",
+                    "size": 1166902,
+                    "type": "rpm",
+                    "version": "3.2a-5.el9"
+                }
             }
-        }
-        for agent in agents
-        for _ in range(amount)
-    ]
-
-    if not packages:
-        logger.warning("No packages generated to send.")
-        return
-    return packages
 
 
 def index_packages(cluster_url, user, password, packages):
@@ -322,68 +313,42 @@ def refresh_index(cluster_url, index, user, password):
     logger.info('Index refreshed successfully.')
 
 
-def generate_package_doc_chunk(agent_chunk, amount):
-    """Generate package documents for a chunk of agents."""
-    return [
-        {
-            "agent": {
-                "id": agent.get('agent', {}).get('id'),
-                "name": agent.get('agent', {}).get('name'),
-                "groups": agent.get('agent', {}).get('groups'),
-                "type": agent.get('agent', {}).get('type'),
-                "version": agent.get('agent', {}).get('version'),
-                "host": {
-                    "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
-                    "hostname": agent.get('agent', {}).get('host', {}).get('hostname'),
-                    "ip": agent.get('agent', {}).get('host', {}).get('ip'),
-                    "os": {
-                        "name": agent.get('agent', {}).get('host', {}).get('os', {}).get('name'),
-                        "type": agent.get('agent', {}).get('host', {}).get('os', {}).get('type'),
-                        "version": agent.get('agent', {}).get('host', {}).get('os', {}).get('version')
-                    }
-                },
-            },
-            "@timestamp": datetime.datetime.now().isoformat(),
-            "package": {
-                "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
-                "description": "tmux is a terminal multiplexer.",
-                "installed": "1738151465",
-                "name": "tmux",
-                "path": " ",
-                "size": 1166902,
-                "type": "rpm",
-                "version": "3.2a-5.el9"
-            }
-        }
-        for agent in agent_chunk
-        for _ in range(amount)
-    ]
-
-
 def generate_packages_in_batches(agents, amount, batch_size):
     """Generate package documents in smaller batches to avoid memory overflow."""
     total_packages = len(agents) * amount
-    logger.info(f"Generating {total_packages} package documents in batches of {
-                batch_size}...")
+    logger.info(f"Generating {total_packages} package documents in batches of {batch_size}...")
 
     for i in range(0, len(agents), batch_size):
         batch_agents = agents[i:i + batch_size]
-        packages = generate_package_doc(batch_agents, amount)
-        logger.info(f"Generated batch {i // batch_size + 1} of {len(agents) // batch_size + 1} packages.")
-        yield packages
+        logger.info(f"Generating batch {i // batch_size + 1} of {len(agents) // batch_size + 1}...")
+        yield from generate_package_doc(batch_agents, amount)
 
 
-def generate_and_index_packages(cluster_url, user, password, agents, num_packages, batch_size=50000):
-    """Generate and index packages in batches synchronously."""
+def generate_and_index_packages(cluster_url, user, password, agents, num_packages, batch_size=10000):
+    """Generate and index packages in larger batches synchronously."""
     doc_url = f"{cluster_url}/{INDEX_PACKAGES}/_bulk"
+    session = get_retry_session()
+    batch = []  # Collect documents before sending
 
-    for batch in generate_packages_in_batches(agents, num_packages, batch_size):
-        if not batch:
-            continue
-        response = index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size=10000)
-        logger.info(f"Indexed {len(batch)} packages successfully.")
-        logger.debug("Response: %s", response)
-        save_generated_data(batch, GENERATED_PACKAGES)
+    logger.info(f"Generating {num_packages} packages for each of the {len(agents)} agents...")
+
+    for package_doc in generate_package_doc(agents, num_packages):
+        logger.info(f"Generated package: {package_doc}")
+        batch.append(package_doc)
+
+        # Send when reaching batch size
+        if len(batch) >= batch_size:
+            index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size=batch_size, session=session)
+            logger.info(f"Indexed {len(batch)} packages successfully.")
+            batch.clear()  # Clear list for next batch
+            sleep(0.01)
+
+    # Send remaining documents if any
+    if batch:
+        index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size=batch_size, session=session)
+        logger.debug(f"Indexed final {len(batch)} packages successfully.")
+
+    logger.info("All packages generated and indexed successfully.")
 
 
 def main():
@@ -405,17 +370,17 @@ def main():
 
     # Load or Generate Agents
     if num_agents == 0:
-        logger.info("Loading existing agents from file...")
+        print("Loading existing agents from file...")
         try:
             with open(GENERATED_AGENTS, 'r') as infile:
                 agents = json.load(infile)
-            logger.info("Agents loaded successfully.")
+            print("Agents loaded successfully.")
         except (IOError, json.JSONDecodeError) as e:
             logger.error(f"Error loading agents file: {e}")
             return
     else:
-        logger.info("Generating new agents...")
-        agents = generate_agents(num_agents)
+        print("Generating new agents...")
+        agents = list(generate_agents(num_agents))
         save_generated_data(agents, GENERATED_AGENTS)
         index_agents(cluster_url, user, password, agents)
         refresh_index(cluster_url, INDEX_AGENTS, user, password)
@@ -423,23 +388,24 @@ def main():
 
     # Load or Generate Packages
     if num_packages == 0:
-        logger.info("Loading existing package data from file...")
+        print("Loading existing package data from file...")
         try:
             with open(GENERATED_PACKAGES, 'r') as infile:
                 packages = json.load(infile)
-            logger.info(f"Loaded {len(packages)} packages successfully.")
+            print(f"Loaded {len(packages)} packages successfully.")
         except (IOError, json.JSONDecodeError) as e:
             logger.error(f"Error loading packages file: {e}")
             return
 
         # Index the loaded packages
-        logger.info("Indexing loaded packages into Elasticsearch...")
+        print("Indexing loaded packages into Wazuh Indexer...")
         index_packages(cluster_url, user, password, packages)
     else:
-        logger.info("Generating and indexing packages...")
+        print("Generating and indexing packages...")
         generate_and_index_packages(cluster_url, user, password, agents, num_packages)
 
     force_merge(cluster_url, user, password)
+    sleep(2)
     refresh_index(cluster_url, INDEX_PACKAGES, user, password)
     sleep(2)
 
