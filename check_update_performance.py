@@ -11,7 +11,6 @@ import urllib3
 # Constants and Configuration
 LOG_FILE = 'update_performance.log'
 GENERATED_AGENTS = 'generated_agents.json'
-GENERATED_PACKAGES = 'generated_packages.json'
 
 # Default values
 INDEX_AGENTS = "wazuh-agents"
@@ -40,8 +39,7 @@ random.shuffle(unique_groups)
 
 def get_retry_session():
     session = requests.Session()
-    retries = urllib3.Retry(total=5, backoff_factor=1,
-                            status_forcelist=[500, 502, 503, 504])
+    retries = urllib3.Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retries))
     return session
 
@@ -145,7 +143,7 @@ def generate_and_index_packages(cluster_url, user, password, agents, num_package
         if len(batch) >= batch_size:
             index_post_batch(doc_url, user, password, batch,
                              INDEX_PACKAGES, batch_size, session)
-            logger.info(f"Indexed {len(batch)} packages successfully.")
+            logger.info(f"Indexed {len(batch)} packages successfully. {len(batch) / (len(agents) * num_packages) * 100:.2f}%")
             batch.clear()  # Clear list for next batch
             sleep(0.01)
 
