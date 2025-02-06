@@ -132,26 +132,26 @@ def generate_and_index_packages(cluster_url, user, password, agents, num_package
     doc_url = f"{cluster_url}/{INDEX_PACKAGES}/_bulk"
     session = get_retry_session()
     batch = []  # Collect documents before sending
+    total_packages = len(agents) * num_packages
+    indexed_packages = 0
 
-    logger.info(f"Generating {num_packages} packages for each of the {
-                len(agents)} agents...")
+    logger.info(f"Generating {num_packages} packages for each of the {len(agents)} agents...")
 
     for package_doc in generate_package_doc(agents, num_packages):
         batch.append(package_doc)
+        indexed_packages += 1
 
         # Send when reaching batch size
         if len(batch) >= batch_size:
-            index_post_batch(doc_url, user, password, batch,
-                             INDEX_PACKAGES, batch_size, session)
-            logger.info(f"Indexed {len(batch)} packages successfully. {len(batch) / (len(agents) * num_packages) * 100:.2f}%")
+            index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size, session)
+            logger.info(f"Indexed {indexed_packages} packages successfully. {indexed_packages / total_packages * 100:.2f}%")
             batch.clear()  # Clear list for next batch
             sleep(0.01)
 
     # Send remaining documents if any
     if batch:
-        index_post_batch(doc_url, user, password, batch,
-                         INDEX_PACKAGES, batch_size, session)
-        logger.debug(f"Indexed final {len(batch)} packages successfully.")
+        index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size, session)
+        logger.info(f"Indexed final {indexed_packages} packages successfully. {indexed_packages / total_packages * 100:.2f}%")
 
     logger.info("All packages generated and indexed successfully.")
 
