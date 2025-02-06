@@ -137,7 +137,6 @@ def generate_and_index_packages_parallel(cluster_url, user, password, agents, nu
 def generate_and_index_packages(cluster_url, user, password, agents, num_packages, batch_size=10000):
     """Generate and index packages in larger batches synchronously."""
     doc_url = f"{cluster_url}/{INDEX_PACKAGES}/_bulk"
-    session = get_retry_session()
     batch = []  # Collect documents before sending
     total_packages = len(agents) * num_packages
     indexed_packages = 0
@@ -150,7 +149,7 @@ def generate_and_index_packages(cluster_url, user, password, agents, num_package
 
         # Send when reaching batch size
         if len(batch) >= batch_size:
-            index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size, session)
+            index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size)
             logger.info(f"Indexed {indexed_packages} packages successfully. {indexed_packages / total_packages * 100:.2f}%")
             batch.clear()  # Clear list for next batch
             sleep(0.01)
