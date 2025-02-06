@@ -1,0 +1,174 @@
+import argparse
+import datetime
+import json
+import logging
+import multiprocessing
+from time import sleep
+import queue
+import logging.handlers
+from concurrent.futures import ProcessPoolExecutor
+
+from data_generation import agents_generator, package_generator
+from index_data import force_merge, index_data_from_generator, refresh_index
+
+# Constants and Configuration
+LOG_FILE = 'update_performance.log'
+GENERATED_AGENTS = 'generated_agents.json'
+INDEX_PACKAGES = "wazuh-states-inventory-packages"
+INDEX_AGENTS = "wazuh-agents"
+
+# Default values
+DEFAULT_USER = "admin"
+DEFAULT_PASSWORD = "admin"
+DEFAULT_IP = "127.0.0.1"
+DEFAULT_PORT = "9200"
+
+# Define log queue globally (not passed to subprocesses)
+log_queue = None  # Queue for logging messages
+
+
+def logger_listener(log_queue: queue.Queue):
+    """Listens for log messages from processes and writes them to a file."""
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # File handler
+    file_handler = logging.FileHandler(LOG_FILE, mode="a")
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s"))
+
+    logger.addHandler(file_handler)
+
+    while True:
+        try:
+            record = log_queue.get()
+            if record is None:  # Stop signal
+                break
+            logger.handle(record)
+        except queue.Empty:
+            continue
+
+
+def worker(cluster_url: str, creds: dict, agents: list[dict], num_packages: int) -> None:
+    """Worker function for processing agent data."""
+    global log_queue  # Access the global queue
+
+    # Create a process-specific logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    logger.addHandler(queue_handler)
+
+    logger.info(f"Generating {num_packages} packages for each of the {len(agents)} agents...")
+
+    index_data_from_generator(
+        cluster_url, creds, INDEX_PACKAGES, package_generator, num_packages, agents)
+
+    logger.info(f"Finished generating and indexing packages.")
+
+
+def generate_packages_parallel(cluster_url: str, creds: dict, agents: list[dict], num_packages: int, processes=None) -> None:
+    """Runs generate_and_index_packages using multiprocessing with logging queue."""
+    global log_queue  # Define log queue globally
+
+    if not processes:
+        processes = multiprocessing.cpu_count()
+
+    chunk_size = max(1, len(agents) // processes)
+    agent_chunks = [agents[i:i + chunk_size]
+                    for i in range(0, len(agents), chunk_size)]
+
+    # Set up logging queue and listener process
+    log_queue = multiprocessing.Queue()
+    log_process = multiprocessing.Process(target=logger_listener, args=(log_queue))
+    log_process.start()
+
+    with ProcessPoolExecutor(max_workers=processes) as executor:
+        futures = [
+            executor.submit(worker, cluster_url, creds, chunk, num_packages)
+            for chunk in agent_chunks
+        ]
+
+        for future in futures:
+            future.result()  # Ensure all processes complete
+
+    # Stop logging process
+    log_queue.put(None)
+    log_process.join()
+
+    logging.info("All processes have completed package generation and indexing.")
+
+
+def update_groups_get_performance(cluster_url: str, creds: dict) -> None:
+    """Update groups and measure performance."""
+    groups = ['windows', 'linux', 'macos']
+    new_group = 'new-group'
+    results = []
+    print("Updating groups...\n")
+    for group in groups:
+        start = datetime.datetime.now()
+        result = update_group(cluster_url, creds, INDEX_PACKAGES, group, f"{new_group}-{group}")
+        end = datetime.datetime.now()
+        print(f"Time taken to update group {group}: {end - start} seconds")
+        results.append(result)
+        sleep(1)
+
+
+def save_generated_data(data, filename):
+    """Save generated data to a file."""
+    with open(filename, 'w') as outfile:
+        json.dump(data, outfile, indent=2)
+
+
+# Main function
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate and index package data.")
+    parser.add_argument("-ip", default=DEFAULT_IP, help="Indexer's IP address")
+    parser.add_argument("-port", default=DEFAULT_PORT, help="Indexer's port")
+    parser.add_argument("-user", default=DEFAULT_USER, help="Indexer's user")
+    parser.add_argument("-password", default=DEFAULT_PASSWORD, help="Indexer's password")
+    parser.add_argument("-agents", type=int, default=0, help="Number of agents to generate (0 to load from file)")
+    parser.add_argument("-packages", type=int, default=100, help="Number of packages to generate for each agent")
+    parser.add_argument("-threads", type=int, default=1, help="Number of threads to use")
+    args = parser.parse_args()
+
+    credentials = {"user": args.user, "password": args.password}
+    num_agents = args.agents
+    num_packages = args.packages
+    processes = args.threads
+    cluster_url = f"https://{args.ip}:{args.port}"
+
+    # Load or Generate Agents
+    if num_agents == 0:
+        print("Loading existing agents from file...")
+        try:
+            with open(GENERATED_AGENTS, 'r') as infile:
+                agents = json.load(infile)
+            print("Agents loaded successfully.")
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"Error loading agents file: {e}")
+            return
+    else:
+        print("Generating new agents...")
+        agents = index_data_from_generator(cluster_url, credentials, INDEX_AGENTS, agents_generator, num_agents, _return=True)
+        save_generated_data(agents, GENERATED_AGENTS)
+
+    if processes == 1:
+        print("Generating and indexing packages synchronously...")
+        index_data_from_generator(cluster_url, credentials, INDEX_PACKAGES, package_generator, num_packages, agents)
+    else:
+        print("Generating and indexing packages in parallel...")
+        generate_packages_parallel(cluster_url, credentials, agents, num_packages, processes)
+
+    sleep(60)
+    print("Forcing merge and refreshing index...")
+    force_merge(cluster_url, credentials)
+    sleep(5)
+    refresh_index(cluster_url, INDEX_PACKAGES, credentials)
+    sleep(60)
+    update_groups_get_performance(cluster_url, credentials)
+
+
+if __name__ == "__main__":
+    main()
