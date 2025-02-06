@@ -2,6 +2,7 @@ import datetime
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
 from requests.adapters import HTTPAdapter
 import random
 from time import sleep
@@ -107,24 +108,30 @@ def index_agents(cluster_url, user, password, data):
     return data
 
 
-def generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, batch_size=10000, num_threads=4):
-    """Run generate_and_index_packages in multiple threads by splitting the agents list."""
+def generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, batch_size=10000, num_processes=None):
+    """Run generate_and_index_packages in multiple processes by splitting the agents list."""
 
     def worker(agent_subset):
-        """Thread worker function to process a subset of agents."""
+        """Process worker function to handle a subset of agents."""
         generate_and_index_packages(cluster_url, user, password, agent_subset, num_packages, batch_size)
 
-    # Split agents into equal chunks for each thread
-    chunk_size = max(1, len(agents) // num_threads)
+    # Set number of processes (default: CPU count)
+    if num_processes is None:
+        num_processes = multiprocessing.cpu_count()
+
+    # Split agents into equal chunks for each process
+    chunk_size = max(1, len(agents) // num_processes)
     agent_chunks = [agents[i:i + chunk_size] for i in range(0, len(agents), chunk_size)]
 
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(worker, chunk) for chunk in agent_chunks]
+    # Use multiprocessing Pool
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        results = [pool.apply_async(worker, (chunk,)) for chunk in agent_chunks]
 
-        for future in futures:
-            future.result()  # Ensures all threads complete before proceeding
+        # Ensure all processes complete
+        for result in results:
+            result.get()  # Wait for process to finish and catch any errors
 
-    logger.info("All threads have completed package generation and indexing.")
+    logger.info("All processes have completed package generation and indexing.")
 
 
 def generate_and_index_packages(cluster_url, user, password, agents, num_packages, batch_size=10000):
@@ -404,12 +411,12 @@ def main():
         agents = list(generate_agents(num_agents))
         save_generated_data(agents, GENERATED_AGENTS)
 
-    if num_threads > 1:
-        print("Generating and indexing packages in parallel...")
-        generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, num_threads=num_threads)
-    else:
+    if num_threads == 1:
         print("Generating and indexing packages synchronously...")
         generate_and_index_packages(cluster_url, user, password, agents, num_packages)
+    else:
+        print("Generating and indexing packages in parallel...")
+        generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, num_threads=num_threads)
 
     sleep(15)
     print("Forcing merge and refreshing index...")
