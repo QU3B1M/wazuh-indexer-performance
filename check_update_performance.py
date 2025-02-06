@@ -107,15 +107,17 @@ def index_agents(cluster_url, user, password, data):
     return data
 
 
+
+def worker(args):
+    """Process worker function to handle a subset of agents."""
+    cluster_url, user, password, agent_subset, num_packages, batch_size = args
+    generate_and_index_packages(cluster_url, user, password, agent_subset, num_packages, batch_size)
+
+
 def generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, batch_size=10000, num_processes=None):
     """Run generate_and_index_packages in multiple processes by splitting the agents list."""
 
-    def worker(agent_subset):
-        """Process worker function to handle a subset of agents."""
-        generate_and_index_packages(cluster_url, user, password, agent_subset, num_packages, batch_size)
-
-    # Set number of processes (default: CPU count)
-    if num_processes is None or num_processes is 0:
+    if num_processes is None:
         num_processes = multiprocessing.cpu_count()
 
     # Split agents into equal chunks for each process
@@ -124,7 +126,7 @@ def generate_and_index_packages_parallel(cluster_url, user, password, agents, nu
 
     # Use multiprocessing Pool
     with multiprocessing.Pool(processes=num_processes) as pool:
-        results = [pool.apply_async(worker, (chunk,)) for chunk in agent_chunks]
+        results = [pool.apply_async(worker, ((cluster_url, user, password, chunk, num_packages, batch_size),)) for chunk in agent_chunks]
 
         # Ensure all processes complete
         for result in results:
