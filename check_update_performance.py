@@ -417,7 +417,7 @@ def main():
         generate_and_index_packages(cluster_url, user, password, agents, num_packages)
     else:
         print("Generating and indexing packages in parallel...")
-        generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, num_threads)
+        generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, num_processes=num_threads)
 
     sleep(60)
     print("Forcing merge and refreshing index...")
