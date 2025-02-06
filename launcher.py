@@ -9,7 +9,7 @@ import logging.handlers
 from concurrent.futures import ProcessPoolExecutor
 
 from data_generation import agents_generator, package_generator
-from index_data import force_merge, index_data_from_generator, refresh_index
+from index_data import force_merge, index_data_from_generator, refresh_index, update_group
 
 # Constants and Configuration
 LOG_FILE = 'update_performance.log'
@@ -165,7 +165,7 @@ def main():
     print("Forcing merge and refreshing index...")
     force_merge(cluster_url, credentials)
     sleep(5)
-    refresh_index(cluster_url, INDEX_PACKAGES, credentials)
+    refresh_index(cluster_url, credentials, INDEX_PACKAGES)
     sleep(60)
     update_groups_get_performance(cluster_url, credentials)
 
