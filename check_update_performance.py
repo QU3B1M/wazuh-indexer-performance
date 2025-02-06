@@ -1,6 +1,7 @@
 import datetime
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
 import random
 from time import sleep
@@ -39,7 +40,8 @@ random.shuffle(unique_groups)
 
 def get_retry_session():
     session = requests.Session()
-    retries = urllib3.Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    retries = urllib3.Retry(total=5, backoff_factor=1,
+                            status_forcelist=[500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retries))
     return session
 
@@ -54,7 +56,8 @@ def index_post(url: str, user: str, password: str, data: dict | str, session: re
         data = json.dumps(data)
 
     try:
-        response = session.post(url, data=data, headers=headers, verify=False, auth=(user, password))
+        response = session.post(
+            url, data=data, headers=headers, verify=False, auth=(user, password))
         response.raise_for_status()
         logger.debug("Data indexed: %s", response.json())
         return response.json()
@@ -63,14 +66,14 @@ def index_post(url: str, user: str, password: str, data: dict | str, session: re
         return {}
 
 
-def index_post_batch(url: str, user: str, password: str, data: list, index: str, batch_size=1000, session = None):
+def index_post_batch(url: str, user: str, password: str, data: list, index: str, batch_size=1000, session=None):
     """Send a POST request to index documents in larger chunks."""
     data_length = len(data)
 
     def send_request(_data):
         payload = set_bulk_payload(_data, index)
         return index_post(url, user, password, payload, session)
-    
+
     if data_length <= batch_size:
         if not isinstance(data, list):
             data = [data]
@@ -82,36 +85,210 @@ def index_post_batch(url: str, user: str, password: str, data: list, index: str,
         chunk = data[i:i + batch_size]
         response = send_request(chunk)
         responses.append(response)
-        logger.info(f"Indexed batch {i // batch_size + 1} of {data_length // batch_size} successfully.")
+        logger.debug(f"Indexed batch {
+            i // batch_size + 1} of {data_length // batch_size} successfully.")
 
     return responses
 
 
-def save_generated_data(data, filename):
-    """Save generated data to a file."""
-    try:
-        with open(filename, 'w') as outfile:
-            json.dump(data, outfile, indent=2)
-        logger.info("Generated data saved successfully.")
-    except IOError:
-        logger.exception("Error saving data to file.")
+def set_bulk_payload(documents, index):
+    payload = ""
+    for doc in documents:
+        metadata = {"index": {"_index": index,
+                              "_id": doc.get('agent', {}).get('id')}}
+        payload += json.dumps(metadata) + "\n"
+        payload += json.dumps(doc) + "\n"
+    return payload
 
 
-def generate_random_date() -> str:
-    """Generate a random date within the last 10 days."""
-    start_date = datetime.datetime.now()
-    end_date = start_date - datetime.timedelta(days=10)
-    random_date = start_date + (end_date - start_date) * random.random()
-    return random_date.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+# Indexing functions
+
+def index_agents(cluster_url, user, password, data):
+    url = f"{cluster_url}/{INDEX_AGENTS}/_bulk"
+    index_post_batch(url, user, password, data, INDEX_AGENTS)
+    return data
 
 
-def generate_random_groups(extra_group=None) -> list[str]:
-    """Return a list of randomly sampled groups."""
-    groups = random.sample(unique_groups, 128)
-    if extra_group:
-        groups.pop()
-        groups.append(extra_group)
-    return groups
+def generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, batch_size=10000, num_threads=4):
+    """Run generate_and_index_packages in multiple threads by splitting the agents list."""
+
+    def worker(agent_subset):
+        """Thread worker function to process a subset of agents."""
+        generate_and_index_packages(cluster_url, user, password, agent_subset, num_packages, batch_size)
+
+    # Split agents into equal chunks for each thread
+    chunk_size = max(1, len(agents) // num_threads)
+    agent_chunks = [agents[i:i + chunk_size] for i in range(0, len(agents), chunk_size)]
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [executor.submit(worker, chunk) for chunk in agent_chunks]
+
+        for future in futures:
+            future.result()  # Ensures all threads complete before proceeding
+
+    logger.info("All threads have completed package generation and indexing.")
+
+
+def generate_and_index_packages(cluster_url, user, password, agents, num_packages, batch_size=10000):
+    """Generate and index packages in larger batches synchronously."""
+    doc_url = f"{cluster_url}/{INDEX_PACKAGES}/_bulk"
+    session = get_retry_session()
+    batch = []  # Collect documents before sending
+
+    logger.info(f"Generating {num_packages} packages for each of the {
+                len(agents)} agents...")
+
+    for package_doc in generate_package_doc(agents, num_packages):
+        batch.append(package_doc)
+
+        # Send when reaching batch size
+        if len(batch) >= batch_size:
+            index_post_batch(doc_url, user, password, batch,
+                             INDEX_PACKAGES, batch_size, session)
+            logger.info(f"Indexed {len(batch)} packages successfully.")
+            batch.clear()  # Clear list for next batch
+            sleep(0.01)
+
+    # Send remaining documents if any
+    if batch:
+        index_post_batch(doc_url, user, password, batch,
+                         INDEX_PACKAGES, batch_size, session)
+        logger.debug(f"Indexed final {len(batch)} packages successfully.")
+
+    logger.info("All packages generated and indexed successfully.")
+
+
+# Update groups
+
+def update_group(cluster_url, user, password, group, new_group):
+    """Send a POST request to update the group of agents."""
+    url = f"{cluster_url}/{INDEX_PACKAGES}/_update_by_query"
+    payload = {
+        "profile": "true",
+        "query": {
+            "match": {
+                "agent.groups": group
+            }
+        },
+        "script": {
+            "source": "ctx._source.agent.groups = params.newValue",
+            "lang": "painless",
+            "params": {
+                "newValue": new_group
+            }
+        }
+    }
+    response = index_post(url, user, password, payload)
+    logger.info("Group updated successfully.")
+    logger.info("Response: %s", response)
+    return response
+
+
+def update_groups_get_performance(cluster_url, user, password):
+    groups = ['windows', 'linux', 'macos']
+    new_group = 'new-group'
+    results = []
+    print("Updating groups...\n")
+    for group in groups:
+        start = datetime.datetime.now()
+        result = update_group(cluster_url, user,
+                              password, group, f"{new_group}-{group}")
+        end = datetime.datetime.now()
+        print(f"Time taken to update group {group}: {end - start} seconds")
+        results.append(result)
+        sleep(5)
+    [print(result) for result in results]
+
+
+# Force merge and refresh index
+
+def force_merge(cluster_url, user, password):
+    url = f'{cluster_url}/_forcemerge'
+    response = index_post(url, user, password, {})
+    logger.debug("Response: %s", response)
+    logger.info('Force merge completed successfully.')
+
+
+def refresh_index(cluster_url, index, user, password):
+    url = f'{cluster_url}/{index}/_refresh'
+    response = index_post(url, user, password, {})
+    logger.debug("Response: %s", response)
+    logger.info('Index refreshed successfully.')
+
+
+# Package generation
+
+def generate_package_doc(agents, amount):
+    """Send restart documents to a list of agent IDs."""
+    for agent in agents:
+        for _ in range(amount):
+            yield {
+                "agent": {
+                    "id": agent.get('agent', {}).get('id'),
+                    "name": agent.get('agent', {}).get('name'),
+                    "groups": agent.get('agent', {}).get('groups'),
+                    "type": agent.get('agent', {}).get('type'),
+                    "version": agent.get('agent', {}).get('version'),
+                    "host": {
+                        "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
+                        "hostname": agent.get('agent', {}).get('host', {}).get('hostname'),
+                        "ip": agent.get('agent', {}).get('host', {}).get('ip'),
+                        "os": {
+                            "name": agent.get('agent', {}).get('host', {}).get('os', {}).get('name'),
+                            "type": agent.get('agent', {}).get('host', {}).get('os', {}).get('type'),
+                            "version": agent.get('agent', {}).get('host', {}).get('os', {}).get('version')
+                        }
+                    },
+                },
+                "@timestamp": datetime.datetime.now().isoformat(),
+                "package": {
+                    "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
+                    "description": "tmux is a \"terminal multiplexer.\".",
+                    "installed": "1738151465",
+                    "name": "tmux",
+                    "path": " ",
+                    "size": 1166902,
+                    "type": "rpm",
+                    "version": "3.2a-5.el9"
+                }
+            }
+
+
+# Agents generation
+
+def generate_agents(number: int):
+    """Generate a list of random agent events."""
+    logger.info("Generating %d random agents...", number)
+    num_windows = int(0.5 * number)
+    num_macos = int(0.15 * number)
+    num_linux = number - num_windows - num_macos
+
+    logger.info(f"Generating agents: {num_windows} Windows, {
+                num_macos} MacOS, {num_linux} Linux...")
+    for _ in range(num_windows):
+        yield {'agent': generate_random_agent('windows')}
+    for _ in range(num_macos):
+        yield {'agent': generate_random_agent('macos')}
+    for _ in range(num_linux):
+        yield {'agent': generate_random_agent('linux')}
+
+    logger.info("Random data generation complete.")
+
+
+def generate_random_agent(agent_type: str) -> dict:
+    """Generate a random agent configuration."""
+    agent_id = random.randint(0, 99999)
+    return {
+        'id': f'agent{agent_id}',
+        'name': f'Agent{agent_id}',
+        'type': agent_type,
+        'version': f'v{random.randint(0, 9)}-stable',
+        'status': random.choice(['active', 'inactive']),
+        'last_login': generate_random_date(),
+        'groups': generate_random_groups(agent_type),
+        'key': f'key{agent_id}',
+        'host': generate_random_host(agent_type)
+    }
 
 
 def generate_random_host(agent_type: str):
@@ -164,209 +341,55 @@ def generate_random_host(agent_type: str):
     }
 
 
-def generate_random_agent(agent_type: str) -> dict:
-    """Generate a random agent configuration."""
-    agent_id = random.randint(0, 99999)
-    return {
-        'id': f'agent{agent_id}',
-        'name': f'Agent{agent_id}',
-        'type': agent_type,
-        'version': f'v{random.randint(0, 9)}-stable',
-        'status': random.choice(['active', 'inactive']),
-        'last_login': generate_random_date(),
-        'groups': generate_random_groups(agent_type),
-        'key': f'key{agent_id}',
-        'host': generate_random_host(agent_type)
-    }
+def generate_random_date() -> str:
+    """Generate a random date within the last 10 days."""
+    start_date = datetime.datetime.now()
+    end_date = start_date - datetime.timedelta(days=10)
+    random_date = start_date + (end_date - start_date) * random.random()
+    return random_date.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def generate_agents(number: int):
-    """Generate a list of random agent events."""
-    logger.info("Generating %d random agents...", number)
-    num_windows = int(0.5 * number)
-    num_macos = int(0.15 * number)
-    num_linux = number - num_windows - num_macos
-
-    for _ in range(num_windows):
-        yield {'agent': generate_random_agent('windows')}
-    for _ in range(num_macos):
-        yield {'agent': generate_random_agent('macos')}
-    for _ in range(num_linux):
-        yield {'agent': generate_random_agent('linux')}
-
-    logger.info("Random data generation complete.")
+def generate_random_groups(extra_group=None) -> list[str]:
+    """Return a list of randomly sampled groups."""
+    groups = random.sample(unique_groups, 128)
+    if extra_group:
+        groups.pop()
+        groups.append(extra_group)
+    return groups
 
 
-def set_bulk_payload(documents, index):
-    payload = ""
-    for doc in documents:
-        metadata = {"index": {"_index": index, "_id": doc.get('agent', {}).get('id')}}
-        payload += json.dumps(metadata) + "\n"
-        payload += json.dumps(doc) + "\n"
-    return payload
+# Save generated data
+
+def save_generated_data(data, filename):
+    """Save generated data to a file."""
+    try:
+        with open(filename, 'w') as outfile:
+            json.dump(data, outfile, indent=2)
+        logger.info("Generated data saved successfully.")
+    except IOError:
+        logger.exception("Error saving data to file.")
 
 
-def generate_package_doc(agents, amount):
-    """Send restart documents to a list of agent IDs."""
-    for agent in agents:
-        for _ in range(amount):
-            yield {
-                "agent": {
-                    "id": agent.get('agent', {}).get('id'),
-                    "name": agent.get('agent', {}).get('name'),
-                    "groups": agent.get('agent', {}).get('groups'),
-                    "type": agent.get('agent', {}).get('type'),
-                    "version": agent.get('agent', {}).get('version'),
-                    "host": {
-                        "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
-                        "hostname": agent.get('agent', {}).get('host', {}).get('hostname'),
-                        "ip": agent.get('agent', {}).get('host', {}).get('ip'),
-                        "os": {
-                            "name": agent.get('agent', {}).get('host', {}).get('os', {}).get('name'),
-                            "type": agent.get('agent', {}).get('host', {}).get('os', {}).get('type'),
-                            "version": agent.get('agent', {}).get('host', {}).get('os', {}).get('version')
-                        }
-                    },
-                },
-                "@timestamp": datetime.datetime.now().isoformat(),
-                "package": {
-                    "architecture": agent.get('agent', {}).get('host', {}).get('architecture'),
-                    "description": "tmux is a \"terminal multiplexer.\"  It enables a number of terminals (or \
-                                    windows) to be accessed and controlled from a single terminal.  tmux is \
-                                    intended to be a simple, modern, BSD-licensed alternative to programs such \
-                                    as GNU Screen.",
-                    "installed": "1738151465",
-                    "name": "tmux",
-                    "path": " ",
-                    "size": 1166902,
-                    "type": "rpm",
-                    "version": "3.2a-5.el9"
-                }
-            }
-
-
-def index_packages(cluster_url, user, password, packages):
-    url = f"{cluster_url}/{INDEX_PACKAGES}/_bulk"
-    response = index_post_batch(url, user, password, packages, INDEX_PACKAGES, batch_size=10000)
-    logger.debug("Response: %s", response)
-    logger.info(f"Successfully sent {len(packages)} packages.")
-    return response
-
-
-def update_group(cluster_url, user, password, group, new_group):
-    """Send a POST request to update the group of agents."""
-    url = f"{cluster_url}/{INDEX_PACKAGES}/_update_by_query"
-    payload = {
-        "profile": "true",
-        "query": {
-            "match": {
-                "agent.groups": group
-            }
-        },
-        "script": {
-            "source": "ctx._source.agent.groups = params.newValue",
-            "lang": "painless",
-            "params": {
-                "newValue": new_group
-            }
-        }
-    }
-    response = index_post(url, user, password, payload)
-    logger.info("Group updated successfully.")
-    logger.info("Response: %s", response)
-    return response
-
-
-def index_agents(cluster_url, user, password, data):
-    url = f"{cluster_url}/{INDEX_AGENTS}/_bulk"
-    index_post_batch(url, user, password, data, INDEX_AGENTS)
-    return data
-
-
-def update_groups_get_performance(cluster_url, user, password):
-    groups = ['windows', 'linux', 'macos']
-    new_group = 'new-group'
-    results = []
-    print("Updating groups...\n")
-    for group in groups:
-        start = datetime.datetime.now()
-        result = update_group(cluster_url, user,
-                              password, group, f"{new_group}-{group}")
-        end = datetime.datetime.now()
-        print(f"Time taken to update group {group}: {end - start} seconds")
-        results.append(result)
-        sleep(5)
-    [print(result) for result in results]
-
-
-def force_merge(cluster_url, user, password):
-    url = f'{cluster_url}/_forcemerge'
-    response = index_post(url, user, password, {})
-    logger.debug("Response: %s", response)
-    logger.info('Force merge completed successfully.')
-
-
-def refresh_index(cluster_url, index, user, password):
-    url = f'{cluster_url}/{index}/_refresh'
-    response = index_post(url, user, password, {})
-    logger.debug("Response: %s", response)
-    logger.info('Index refreshed successfully.')
-
-
-def generate_packages_in_batches(agents, amount, batch_size):
-    """Generate package documents in smaller batches to avoid memory overflow."""
-    total_packages = len(agents) * amount
-    logger.info(f"Generating {total_packages} package documents in batches of {batch_size}...")
-
-    for i in range(0, len(agents), batch_size):
-        batch_agents = agents[i:i + batch_size]
-        logger.info(f"Generating batch {i // batch_size + 1} of {len(agents) // batch_size + 1}...")
-        yield from generate_package_doc(batch_agents, amount)
-
-
-def generate_and_index_packages(cluster_url, user, password, agents, num_packages, batch_size=10000):
-    """Generate and index packages in larger batches synchronously."""
-    doc_url = f"{cluster_url}/{INDEX_PACKAGES}/_bulk"
-    session = get_retry_session()
-    batch = []  # Collect documents before sending
-
-    logger.info(f"Generating {num_packages} packages for each of the {len(agents)} agents...")
-
-    for package_doc in generate_package_doc(agents, num_packages):
-        logger.info(f"Generated package: {package_doc}")
-        batch.append(package_doc)
-
-        # Send when reaching batch size
-        if len(batch) >= batch_size:
-            index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size=batch_size, session=session)
-            logger.info(f"Indexed {len(batch)} packages successfully.")
-            batch.clear()  # Clear list for next batch
-            sleep(0.01)
-
-    # Send remaining documents if any
-    if batch:
-        index_post_batch(doc_url, user, password, batch, INDEX_PACKAGES, batch_size=batch_size, session=session)
-        logger.debug(f"Indexed final {len(batch)} packages successfully.")
-
-    logger.info("All packages generated and indexed successfully.")
-
+# Main function
 
 def main():
     # User inputs
-    ip = input(f"Enter the IP of your Indexer (default: '{DEFAULT_IP}'): ") or DEFAULT_IP
-    port = input(f"Enter the port of your Indexer (default: '{DEFAULT_PORT}'): ") or DEFAULT_PORT
+    ip = input(f"Enter Indexer's IP (default: '{DEFAULT_IP}'): ") or DEFAULT_IP
+    port = input(f"Enter Indexer's port (default: '{DEFAULT_PORT}'): ") or DEFAULT_PORT
     user = input(f"Enter user (default: '{DEFAULT_USER}'): ") or DEFAULT_USER
-    password = input(f"Enter password (default: '{DEFAULT_PASSWORD}'): ") or DEFAULT_PASSWORD
-
-    cluster_url = f"https://{ip}:{port}"
+    password = input(f"Enter password (default: '{
+                     DEFAULT_PASSWORD}'): ") or DEFAULT_PASSWORD
 
     try:
-        num_agents = int(input("Enter the number of agents to generate (0 to load from file): "))
-        num_packages = int(input("Enter the number of packages to generate for each agent (0 to load from file): "))
+        num_agents = int(input("Amount of agents to generate (0 to load from file): "))
+        num_packages = int(input("Amount of packages to generate for each agent: "))
         update_groups = input("Update groups? (y/n): ").lower() == 'y'
+        num_threads = int(input("Enter the number of threads to use (default: 1): ") or 1)
     except ValueError:
         logger.error("Invalid input. Please enter valid numbers.")
         return
+
+    cluster_url = f"https://{ip}:{port}"
 
     # Load or Generate Agents
     if num_agents == 0:
@@ -382,32 +405,20 @@ def main():
         print("Generating new agents...")
         agents = list(generate_agents(num_agents))
         save_generated_data(agents, GENERATED_AGENTS)
-        index_agents(cluster_url, user, password, agents)
-        refresh_index(cluster_url, INDEX_AGENTS, user, password)
-        sleep(2)
 
-    # Load or Generate Packages
-    if num_packages == 0:
-        print("Loading existing package data from file...")
-        try:
-            with open(GENERATED_PACKAGES, 'r') as infile:
-                packages = json.load(infile)
-            print(f"Loaded {len(packages)} packages successfully.")
-        except (IOError, json.JSONDecodeError) as e:
-            logger.error(f"Error loading packages file: {e}")
-            return
-
-        # Index the loaded packages
-        print("Indexing loaded packages into Wazuh Indexer...")
-        index_packages(cluster_url, user, password, packages)
+    if num_threads > 1:
+        print("Generating and indexing packages in parallel...")
+        generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, num_threads=num_threads)
     else:
-        print("Generating and indexing packages...")
+        print("Generating and indexing packages synchronously...")
         generate_and_index_packages(cluster_url, user, password, agents, num_packages)
 
+    sleep(15)
+    print("Forcing merge and refreshing index...")
     force_merge(cluster_url, user, password)
-    sleep(2)
+    sleep(5)
     refresh_index(cluster_url, INDEX_PACKAGES, user, password)
-    sleep(2)
+    sleep(5)
 
     if update_groups:
         update_groups_get_performance(cluster_url, user, password)
