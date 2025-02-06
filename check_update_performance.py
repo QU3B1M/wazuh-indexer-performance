@@ -1,7 +1,6 @@
 import datetime
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 from requests.adapters import HTTPAdapter
 import random
@@ -116,7 +115,7 @@ def generate_and_index_packages_parallel(cluster_url, user, password, agents, nu
         generate_and_index_packages(cluster_url, user, password, agent_subset, num_packages, batch_size)
 
     # Set number of processes (default: CPU count)
-    if num_processes is None:
+    if num_processes is None or num_processes is 0:
         num_processes = multiprocessing.cpu_count()
 
     # Split agents into equal chunks for each process
@@ -416,14 +415,14 @@ def main():
         generate_and_index_packages(cluster_url, user, password, agents, num_packages)
     else:
         print("Generating and indexing packages in parallel...")
-        generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, num_threads=num_threads)
+        generate_and_index_packages_parallel(cluster_url, user, password, agents, num_packages, num_threads)
 
-    sleep(15)
+    sleep(60)
     print("Forcing merge and refreshing index...")
     force_merge(cluster_url, user, password)
     sleep(5)
     refresh_index(cluster_url, INDEX_PACKAGES, user, password)
-    sleep(5)
+    sleep(60)
 
     if update_groups:
         update_groups_get_performance(cluster_url, user, password)
