@@ -112,6 +112,7 @@ def update_groups_get_performance(cluster_url: str, creds: dict) -> None:
         print(f"Time taken to update group {group}: {end - start} seconds")
         results.append(result)
         sleep(1)
+    save_generated_data(results, 'update_results.json')
 
 
 def save_generated_data(data, filename):
