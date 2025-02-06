@@ -80,7 +80,7 @@ def generate_packages_parallel(cluster_url: str, creds: dict, agents: list[dict]
 
     # Set up logging queue and listener process
     log_queue = multiprocessing.Queue()
-    log_process = multiprocessing.Process(target=logger_listener, args=(log_queue))
+    log_process = multiprocessing.Process(target=logger_listener, args=(log_queue, ))
     log_process.start()
 
     with ProcessPoolExecutor(max_workers=processes) as executor:
@@ -155,6 +155,7 @@ def main():
         agents = index_data_from_generator(cluster_url, credentials, INDEX_AGENTS, agents_generator, num_agents, _return=True)
         save_generated_data(agents, GENERATED_AGENTS)
 
+    print(f"Total packages to generate: {num_agents * num_packages}")
     if processes == 1:
         print("Generating and indexing packages synchronously...")
         index_data_from_generator(cluster_url, credentials, INDEX_PACKAGES, package_generator, num_packages, agents)
