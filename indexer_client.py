@@ -1,5 +1,6 @@
 
 import json
+import logging
 from time import sleep
 import requests
 import urllib3
@@ -11,6 +12,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def index_post(url: str, credentials: dict, data: dict | str, session: requests.Session = None) -> dict:
     """Send a POST request to index documents."""
+    logger = logging.getLogger(__name__)
     headers = {'Content-Type': 'application/json'}
     if not session:
         session = get_retry_session()
@@ -27,6 +29,7 @@ def index_post(url: str, credentials: dict, data: dict | str, session: requests.
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException:
+        logger.exception(f"Failed to index data to {url}.")
         return {}
 
 

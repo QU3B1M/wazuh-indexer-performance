@@ -18,16 +18,19 @@ def index_data_from_generator(cluster_url: str, creds: dict, index: str, generat
     session = get_retry_session()
     batch = []  # Collect documents before sending
     to_save = []
-    indexed = 0
+    batch_count = 0  # Counter to track number of batches processed
 
+    logger.info(f"Generating and indexing {amount} packages in batches of {BATCH_SIZE}...")
     for document in generator(amount, data):
         batch.append(document)
-        indexed += 1
 
         # Send when reaching batch size
         if len(batch) >= BATCH_SIZE:
             index_post_batch(doc_url, creds, batch, index, BATCH_SIZE, session)
-            logger.info(f"Indexed {indexed} packages successfully.")
+            batch_count += 1
+            # Log only every 10 batches
+            if batch_count % 10 == 0:
+                logger.info(f"Indexed batch {batch_count}.")
             if _return:
                 to_save.extend(batch)
             batch.clear()  # Clear list for next batch
@@ -35,7 +38,10 @@ def index_data_from_generator(cluster_url: str, creds: dict, index: str, generat
     # Send remaining documents if any
     if batch:
         index_post_batch(doc_url, creds, batch, index, BATCH_SIZE, session)
-        logger.info(f"Indexed final {indexed} packages successfully.")
+        batch_count += 1
+        # If you want to log the final batch only if it is a multiple of 10, do:
+        if batch_count % 10 == 0:
+            logger.info(f"Indexed final batch {batch_count}.")
         if _return:
             to_save.extend(batch)
 

@@ -56,7 +56,8 @@ def get_process_logger(name: str = None) -> logging.Logger:
 def worker(cluster_url: str, creds: dict, agents: list, num_packages: int) -> None:
     """Worker function for processing agent data."""
     logger = get_process_logger()
-    logger.info(f"Generating {num_packages} packages for each of the {len(agents)} agents...")
+    logger.info(f"Generating {num_packages} packages for each of the {
+                len(agents)} agents...")
 
     index_data_from_generator(
         cluster_url, creds, INDEX_PACKAGES, package_generator, num_packages, agents
@@ -72,7 +73,8 @@ def generate_packages_parallel(cluster_url: str, creds: dict, agents: list, num_
 
     # Divide agents among processes.
     chunk_size = max(1, len(agents) // processes)
-    agent_chunks = [agents[i:i + chunk_size] for i in range(0, len(agents), chunk_size)]
+    agent_chunks = [agents[i:i + chunk_size]
+                    for i in range(0, len(agents), chunk_size)]
 
     with ProcessPoolExecutor(max_workers=processes) as executor:
         futures = [
@@ -83,7 +85,8 @@ def generate_packages_parallel(cluster_url: str, creds: dict, agents: list, num_
             future.result()  # Wait for all worker processes to complete
 
     # Log completion in the main process.
-    root_logger.info("All processes have completed package generation and indexing.")
+    root_logger.info(
+        "All processes have completed package generation and indexing.")
 
 
 def update_groups_get_performance(cluster_url: str, creds: dict) -> None:
@@ -94,11 +97,12 @@ def update_groups_get_performance(cluster_url: str, creds: dict) -> None:
     print("Updating groups...\n")
     for group in groups:
         start = datetime.datetime.now()
-        result = update_group(cluster_url, creds, INDEX_PACKAGES, group, f"{new_group}-{group}")
+        result = update_group(cluster_url, creds, INDEX_PACKAGES, group, f"{
+                              new_group}-{group}")
         end = datetime.datetime.now()
         print(f"Time taken to update group {group}: {end - start} seconds")
         results.append(result)
-        sleep(0.01)
+        sleep(1)
     save_generated_data(results, 'update_results.json')
 
 
@@ -109,14 +113,19 @@ def save_generated_data(data, filename):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate and index package data.")
+    parser = argparse.ArgumentParser(
+        description="Generate and index package data.")
     parser.add_argument("-ip", default=DEFAULT_IP, help="Indexer's IP address")
     parser.add_argument("-port", default=DEFAULT_PORT, help="Indexer's port")
     parser.add_argument("-user", default=DEFAULT_USER, help="Indexer's user")
-    parser.add_argument("-password", default=DEFAULT_PASSWORD, help="Indexer's password")
-    parser.add_argument("-agents", type=int, default=0, help="Number of agents to generate (0 to load from file)")
-    parser.add_argument("-packages", type=int, default=100, help="Number of packages to generate for each agent")
-    parser.add_argument("-threads", type=int, default=1, help="Number of threads (processes) to use")
+    parser.add_argument("-password", default=DEFAULT_PASSWORD,
+                        help="Indexer's password")
+    parser.add_argument("-agents", type=int, default=0,
+                        help="Number of agents to generate (0 to load from file)")
+    parser.add_argument("-packages", type=int, default=100,
+                        help="Number of packages to generate for each agent")
+    parser.add_argument("-threads", type=int, default=1,
+                        help="Number of threads (processes) to use")
     args = parser.parse_args()
 
     credentials = {"user": args.user, "password": args.password}
@@ -138,16 +147,19 @@ def main():
     else:
         print("Generating new agents...")
         # Assuming index_data_from_generator returns the generated data when _return=True.
-        agents = index_data_from_generator(cluster_url, credentials, INDEX_AGENTS, agents_generator, num_agents, _return=True)
+        agents = index_data_from_generator(
+            cluster_url, credentials, INDEX_AGENTS, agents_generator, num_agents, _return=True)
         save_generated_data(agents, GENERATED_AGENTS)
 
     print(f"Total packages to generate: {num_agents * num_packages}")
     if processes == 1:
         print("Generating and indexing packages synchronously...")
-        index_data_from_generator(cluster_url, credentials, INDEX_PACKAGES, package_generator, num_packages, agents)
+        index_data_from_generator(
+            cluster_url, credentials, INDEX_PACKAGES, package_generator, num_packages, agents)
     else:
         print("Generating and indexing packages in parallel...")
-        generate_packages_parallel(cluster_url, credentials, agents, num_packages, processes)
+        generate_packages_parallel(
+            cluster_url, credentials, agents, num_packages, processes)
 
     # The following sleep calls might be necessary for your external index operations.
     sleep(60)
