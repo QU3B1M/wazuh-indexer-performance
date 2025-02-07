@@ -3,7 +3,7 @@ import logging
 from typing import Generator
 from indexer_client import get_retry_session, index_post, index_post_batch
 
-BATCH_SIZE = 10000
+BATCH_SIZE = 25000
 
 
 def index_data(cluster_url: str, creds: dict, index: str, data: dict) -> list:
