@@ -162,12 +162,12 @@ def main():
             cluster_url, credentials, agents, num_packages, processes)
 
     # The following sleep calls might be necessary for your external index operations.
-    sleep(60)
+    sleep(120)
     print("Forcing merge and refreshing index...")
     force_merge(cluster_url, credentials)
-    sleep(5)
+    sleep(120)
     refresh_index(cluster_url, credentials, INDEX_PACKAGES)
-    sleep(60)
+    sleep(120)
     update_groups_get_performance(cluster_url, credentials)
 
     # Stop the QueueListener gracefully before exiting.
