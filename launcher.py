@@ -2,11 +2,11 @@ import argparse
 import datetime
 import json
 import logging
-import multiprocessing
-from time import sleep
-import queue
 import logging.handlers
+import multiprocessing
+import queue
 from concurrent.futures import ProcessPoolExecutor
+from time import sleep
 
 from data_generation import agents_generator, package_generator
 from index_data import force_merge, index_data_from_generator, refresh_index, update_group
@@ -23,80 +23,67 @@ DEFAULT_PASSWORD = "admin"
 DEFAULT_IP = "127.0.0.1"
 DEFAULT_PORT = "9200"
 
-# Define log queue globally (not passed to subprocesses)
-log_queue = None  # Queue for logging messages
+# Set up a multiprocessing logging queue and a QueueListener in the main process
+log_queue = multiprocessing.Queue()
+
+# Configure a file handler for logging
+file_handler = logging.FileHandler(LOG_FILE, mode="a")
+file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+file_handler.setFormatter(file_formatter)
+
+# Set up the root logger (it will not have any handlers attached here)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Start the QueueListener (this runs in a background thread)
+queue_listener = logging.handlers.QueueListener(log_queue, file_handler)
+queue_listener.start()
 
 
-def logger_listener(log_queue: queue.Queue):
-    """Listens for log messages from processes and writes them to a file."""
-    logger = logging.getLogger()
+def get_process_logger(name: str = None) -> logging.Logger:
+    """
+    Returns a logger that sends its output to the multiprocessing log queue.
+    """
+    logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
-
-    # File handler
-    file_handler = logging.FileHandler(LOG_FILE, mode="a")
-    file_handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s"))
-
-    logger.addHandler(file_handler)
-
-    while True:
-        try:
-            record = log_queue.get()
-            if record is None:  # Stop signal
-                break
-            logger.handle(record)
-        except queue.Empty:
-            continue
+    # Clear any existing handlers to prevent duplicate logs.
+    if not any(isinstance(h, logging.handlers.QueueHandler) for h in logger.handlers):
+        queue_handler = logging.handlers.QueueHandler(log_queue)
+        logger.addHandler(queue_handler)
+    return logger
 
 
-def worker(cluster_url: str, creds: dict, agents: list[dict], num_packages: int) -> None:
+def worker(cluster_url: str, creds: dict, agents: list, num_packages: int) -> None:
     """Worker function for processing agent data."""
-    global log_queue  # Access the global queue
-
-    # Create a process-specific logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    queue_handler = logging.handlers.QueueHandler(log_queue)
-    logger.addHandler(queue_handler)
-
+    logger = get_process_logger()
     logger.info(f"Generating {num_packages} packages for each of the {len(agents)} agents...")
 
     index_data_from_generator(
-        cluster_url, creds, INDEX_PACKAGES, package_generator, num_packages, agents)
+        cluster_url, creds, INDEX_PACKAGES, package_generator, num_packages, agents
+    )
 
-    logger.info(f"Finished generating and indexing packages.")
+    logger.info("Finished generating and indexing packages.")
 
 
-def generate_packages_parallel(cluster_url: str, creds: dict, agents: list[dict], num_packages: int, processes=None) -> None:
-    """Runs generate_and_index_packages using multiprocessing with logging queue."""
-    global log_queue  # Define log queue globally
-
-    if not processes:
+def generate_packages_parallel(cluster_url: str, creds: dict, agents: list, num_packages: int, processes=None) -> None:
+    """Runs package generation using multiprocessing with a logging queue."""
+    if processes is None:
         processes = multiprocessing.cpu_count()
 
+    # Divide agents among processes.
     chunk_size = max(1, len(agents) // processes)
-    agent_chunks = [agents[i:i + chunk_size]
-                    for i in range(0, len(agents), chunk_size)]
-
-    # Set up logging queue and listener process
-    log_queue = multiprocessing.Queue()
-    log_process = multiprocessing.Process(target=logger_listener, args=(log_queue, ))
-    log_process.start()
+    agent_chunks = [agents[i:i + chunk_size] for i in range(0, len(agents), chunk_size)]
 
     with ProcessPoolExecutor(max_workers=processes) as executor:
         futures = [
             executor.submit(worker, cluster_url, creds, chunk, num_packages)
             for chunk in agent_chunks
         ]
-
         for future in futures:
-            future.result()  # Ensure all processes complete
+            future.result()  # Wait for all worker processes to complete
 
-    # Stop logging process
-    log_queue.put(None)
-    log_process.join()
-
-    logging.info("All processes have completed package generation and indexing.")
+    # Log completion in the main process.
+    root_logger.info("All processes have completed package generation and indexing.")
 
 
 def update_groups_get_performance(cluster_url: str, creds: dict) -> None:
@@ -111,7 +98,7 @@ def update_groups_get_performance(cluster_url: str, creds: dict) -> None:
         end = datetime.datetime.now()
         print(f"Time taken to update group {group}: {end - start} seconds")
         results.append(result)
-        sleep(1)
+        sleep(0.01)
     save_generated_data(results, 'update_results.json')
 
 
@@ -121,8 +108,6 @@ def save_generated_data(data, filename):
         json.dump(data, outfile, indent=2)
 
 
-# Main function
-
 def main():
     parser = argparse.ArgumentParser(description="Generate and index package data.")
     parser.add_argument("-ip", default=DEFAULT_IP, help="Indexer's IP address")
@@ -131,7 +116,7 @@ def main():
     parser.add_argument("-password", default=DEFAULT_PASSWORD, help="Indexer's password")
     parser.add_argument("-agents", type=int, default=0, help="Number of agents to generate (0 to load from file)")
     parser.add_argument("-packages", type=int, default=100, help="Number of packages to generate for each agent")
-    parser.add_argument("-threads", type=int, default=1, help="Number of threads to use")
+    parser.add_argument("-threads", type=int, default=1, help="Number of threads (processes) to use")
     args = parser.parse_args()
 
     credentials = {"user": args.user, "password": args.password}
@@ -152,6 +137,7 @@ def main():
             return
     else:
         print("Generating new agents...")
+        # Assuming index_data_from_generator returns the generated data when _return=True.
         agents = index_data_from_generator(cluster_url, credentials, INDEX_AGENTS, agents_generator, num_agents, _return=True)
         save_generated_data(agents, GENERATED_AGENTS)
 
@@ -163,6 +149,7 @@ def main():
         print("Generating and indexing packages in parallel...")
         generate_packages_parallel(cluster_url, credentials, agents, num_packages, processes)
 
+    # The following sleep calls might be necessary for your external index operations.
     sleep(60)
     print("Forcing merge and refreshing index...")
     force_merge(cluster_url, credentials)
@@ -170,6 +157,9 @@ def main():
     refresh_index(cluster_url, credentials, INDEX_PACKAGES)
     sleep(60)
     update_groups_get_performance(cluster_url, credentials)
+
+    # Stop the QueueListener gracefully before exiting.
+    queue_listener.stop()
 
 
 if __name__ == "__main__":
