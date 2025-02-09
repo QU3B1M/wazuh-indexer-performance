@@ -11,14 +11,25 @@ def index_data(cluster_url: str, creds: dict, index: str, data: dict) -> list:
     return index_post_batch(url, creds, data, index)
 
 
-def index_data_from_generator(cluster_url: str, creds: dict, index: str, generator: Generator, amount: int, data: list = [], _return=False) -> None:
+def index_data_from_generator(
+        cluster_url: str,
+        creds: dict,
+        index: str,
+        generator: Generator,
+        amount: int,
+        data: list = [],
+        _return: bool = False,
+        bulk: bool = True) -> None:
     """Generate and index packages in larger batches synchronously."""
     logger = logging.getLogger(__name__)
-    doc_url = f"{cluster_url}/{index}/_bulk"
+    doc_url = f"{cluster_url}/{index}"
     session = get_retry_session()
     batch = []  # Collect documents before sending
     to_save = []
     batch_count = 0  # Counter to track number of batches processed
+
+    if not bulk:
+        [index_post(doc_url, creds, doc, session) for doc in generator(amount, data)]
 
     logger.info(f"Generating and indexing {amount} packages in batches of {BATCH_SIZE}...")
     for document in generator(amount, data):
@@ -26,7 +37,7 @@ def index_data_from_generator(cluster_url: str, creds: dict, index: str, generat
 
         # Send when reaching batch size
         if len(batch) >= BATCH_SIZE:
-            index_post_batch(doc_url, creds, batch, index, BATCH_SIZE, session)
+            index_post_batch(f"{doc_url}/_bulk", creds, batch, index, BATCH_SIZE, session)
             batch_count += 1
             # Log only every 10 batches
             if batch_count % 10 == 0:
