@@ -49,11 +49,20 @@ def index_data_from_generator(cluster_url: str, creds: dict, index: str, generat
     return to_save
 
 
-def update_group(cluster_url: str, creds: dict, index: str, group: str, new_group: str) -> dict:
-    """Send a POST request to update the group of agents."""
-    url = f"{cluster_url}/{index}/_update_by_query"
+def update_group(cluster_url: str, creds: dict, index: str, group: str, new_group: str, max_docs: int = 150000000) -> dict:
+    """Send a POST request to update the group of agents.
+
+    This version adds query parameters to:
+      - Ignore version conflicts (conflicts=proceed)
+      - Optionally set a higher limit for the number of documents to update (max_docs)
+    """
+    # Append query parameters to the URL
+    # Adjust max_docs as needed (here set to 15M, but change according to your scenario)
+    url = f"{cluster_url}/{index}/_update_by_query?conflicts=proceed&max_docs={max_docs}&slices=auto&wait_for_active_shards=all"
+
     payload = {
-        "profile": "true",
+        "profile": True,
+        "timeout": "15m",
         "query": {
             "match": {
                 "agent.groups": group
