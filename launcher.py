@@ -126,14 +126,12 @@ def main():
                         help="Number of packages to generate for each agent")
     parser.add_argument("-threads", type=int, default=1,
                         help="Number of threads (processes) to use")
-    parser.add_argument("-bulk", default=True, help="Use bulk indexing")
     args = parser.parse_args()
 
     credentials = {"user": args.user, "password": args.password}
     num_agents = args.agents
     num_packages = args.packages
     processes = args.threads
-    bulk = args.bulk
     cluster_url = f"https://{args.ip}:{args.port}"
 
     # Load or Generate Agents
@@ -157,7 +155,7 @@ def main():
     if processes == 1:
         print("Generating and indexing packages synchronously...")
         index_data_from_generator(
-            cluster_url, credentials, INDEX_PACKAGES, package_generator, num_packages, agents, bulk=bulk)
+            cluster_url, credentials, INDEX_PACKAGES, package_generator, num_packages, agents)
     else:
         print("Generating and indexing packages in parallel...")
         generate_packages_parallel(

@@ -3,7 +3,7 @@ import logging
 from typing import Generator
 from indexer_client import get_retry_session, index_post, index_post_batch
 
-BATCH_SIZE = 25000
+BATCH_SIZE = 10000
 
 
 def index_data(cluster_url: str, creds: dict, index: str, data: dict) -> list:
@@ -26,22 +26,24 @@ def index_data_from_generator(
     session = get_retry_session()
     batch = []  # Collect documents before sending
     to_save = []
-    batch_count = 0  # Counter to track number of batches processed
-
-    if not bulk:
-        [index_post(doc_url, creds, doc, session) for doc in generator(amount, data)]
+    count = 0  # Counter to track number of batches processed
 
     logger.info(f"Generating and indexing {amount} packages in batches of {BATCH_SIZE}...")
     for document in generator(amount, data):
+        if not bulk:
+            count += 1
+            logger.info(f"Indexing document {count}.")
+            index_post(f"{doc_url}/_doc", creds, document, session)
+            continue
         batch.append(document)
 
         # Send when reaching batch size
         if len(batch) >= BATCH_SIZE:
             index_post_batch(f"{doc_url}/_bulk", creds, batch, index, BATCH_SIZE, session)
-            batch_count += 1
+            count += 1
             # Log only every 10 batches
-            if batch_count % 10 == 0:
-                logger.info(f"Indexed batch {batch_count}.")
+            if count % 10 == 0:
+                logger.info(f"Indexed batch {count}.")
             if _return:
                 to_save.extend(batch)
             batch.clear()  # Clear list for next batch
@@ -49,10 +51,10 @@ def index_data_from_generator(
     # Send remaining documents if any
     if batch:
         index_post_batch(doc_url, creds, batch, index, BATCH_SIZE, session)
-        batch_count += 1
+        count += 1
         # If you want to log the final batch only if it is a multiple of 10, do:
-        if batch_count % 10 == 0:
-            logger.info(f"Indexed final batch {batch_count}.")
+        if count % 10 == 0:
+            logger.info(f"Indexed final batch {count}.")
         if _return:
             to_save.extend(batch)
 
