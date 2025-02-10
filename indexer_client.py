@@ -70,8 +70,7 @@ def get_retry_session() -> requests.Session:
 def __set_bulk_payload(documents: list[dict], index: str) -> str:
     payload = ""
     for doc in documents:
-        _id = doc.get('agent', {}).get('id', '')
-        metadata = {"index": {"_index": index, "_id": _id}}
+        metadata = {"index": {"_index": index}}
         payload += json.dumps(metadata) + "\n"
         payload += json.dumps(doc) + "\n"
     return payload
