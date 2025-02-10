@@ -47,8 +47,6 @@ def index_data_from_generator(
             if _return:
                 to_save.extend(batch)
             batch.clear()  # Clear list for next batch
-            flush_index(cluster_url, creds, index)
-            refresh_index(cluster_url, creds, index)
 
     # Send remaining documents if any
     if batch:
