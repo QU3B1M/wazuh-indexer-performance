@@ -114,14 +114,15 @@ def save_generated_data(data, filename):
 
 def main():
     parser = argparse.ArgumentParser(description="Generate and index package data.")
-    parser.add_argument("-ip", default=DEFAULT_IP, help="Indexer's IP address")
-    parser.add_argument("-port", default=DEFAULT_PORT, help="Indexer's port")
-    parser.add_argument("-user", default=DEFAULT_USER, help="Indexer's user")
-    parser.add_argument("-password", default=DEFAULT_PASSWORD, help="Indexer's password")
-    parser.add_argument("-agents", type=int, default=0, help="Number of agents to generate (0 to load from file)")
-    parser.add_argument("-packages", type=int, default=100, help="Number of packages to generate for each agent")
-    parser.add_argument("-threads", type=int, default=1, help="Number of threads (processes) to use")
-    parser.add_argument("-update", type=bool, default=False, help="Update packages groups")
+    parser.add_argument("--ip", default=DEFAULT_IP, help="Indexer's IP address")
+    parser.add_argument("--port", default=DEFAULT_PORT, help="Indexer's port")
+    parser.add_argument("--user", default=DEFAULT_USER, help="Indexer's user")
+    parser.add_argument("--password", default=DEFAULT_PASSWORD, help="Indexer's password")
+    parser.add_argument("--agents", type=int, default=0, help="Number of agents to generate (0 to load from file)")
+    parser.add_argument("--packages", type=int, default=100, help="Number of packages to generate for each agent")
+    parser.add_argument("--threads", type=int, default=1, help="Number of threads (processes) to use")
+    parser.add_argument("--update", type=bool, default=False, help="Update packages groups")
+    parser.add_argument("--only-update", type=bool, default=False, help="Update packages groups")
     args = parser.parse_args()
 
     credentials = {"user": args.user, "password": args.password}
@@ -129,7 +130,12 @@ def main():
     num_packages = args.packages
     processes = args.threads
     update = args.update
+    only_update = args.only_update
     cluster_url = f"https://{args.ip}:{args.port}"
+
+    if only_update:
+        update_groups_get_performance(cluster_url, credentials)
+        return
 
     # Load or Generate Agents
     if num_agents == 0:
