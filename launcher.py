@@ -148,7 +148,7 @@ def main():
             cluster_url, credentials, INDEX_AGENTS, agents_generator, num_agents, _return=True)
         save_generated_data(agents, GENERATED_AGENTS)
 
-    print(f"Total packages to generate: {num_agents * num_packages}")
+    print(f"Total packages to generate: {len(agents) * num_packages}")
     if processes == 1:
         print("Generating and indexing packages synchronously...")
         index_data_from_generator(
