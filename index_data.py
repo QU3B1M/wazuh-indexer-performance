@@ -47,6 +47,8 @@ def index_data_from_generator(
             if _return:
                 to_save.extend(batch)
             batch.clear()  # Clear list for next batch
+            flush_index(cluster_url, creds, index)
+            refresh_index(cluster_url, creds, index)
 
     # Send remaining documents if any
     if batch:
@@ -99,4 +101,9 @@ def force_merge(cluster_url: str, creds: dict) -> dict:
 
 def refresh_index(cluster_url: str, creds: dict, index: str) -> dict:
     url = f'{cluster_url}/{index}/_refresh'
+    return index_post(url, creds, {})
+
+
+def flush_index(cluster_url: str, creds: dict, index: str) -> dict:
+    url = f'{cluster_url}/{index}/_flush'
     return index_post(url, creds, {})
