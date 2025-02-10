@@ -96,9 +96,9 @@ def update_groups_get_performance(cluster_url: str, creds: dict) -> None:
     results = []
     print("Updating groups...\n")
     for group in groups:
+        print(f"Update documents from group {group}")
         start = datetime.datetime.now()
-        result = update_group(cluster_url, creds, INDEX_PACKAGES, group, f"{
-                              new_group}-{group}")
+        result = update_group(cluster_url, creds, INDEX_PACKAGES, group, f"{new_group}-{group}")
         end = datetime.datetime.now()
         print(f"Time taken to update group {group}: {end - start} seconds")
         results.append(result)
