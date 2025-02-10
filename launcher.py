@@ -121,8 +121,8 @@ def main():
     parser.add_argument("--agents", type=int, default=0, help="Number of agents to generate (0 to load from file)")
     parser.add_argument("--packages", type=int, default=100, help="Number of packages to generate for each agent")
     parser.add_argument("--threads", type=int, default=1, help="Number of threads (processes) to use")
-    parser.add_argument("--update", type=bool, default=False, help="Update packages groups")
-    parser.add_argument("--only-update", type=bool, default=False, help="Update packages groups")
+    parser.add_argument("--update", type=bool, default=False, action="store_true", help="Update packages groups")
+    parser.add_argument("--only-update", type=bool, action="store_true", default=False, help="Update packages groups")
     args = parser.parse_args()
 
     credentials = {"user": args.user, "password": args.password}
